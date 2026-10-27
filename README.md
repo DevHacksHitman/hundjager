@@ -79,6 +79,9 @@ graph TD
    ```bash
    # Custom host, port, or downloads directory
    python3 app/server.py --host 127.0.0.1 --port 5050 --downloads-dir ~/Downloads
+
+   # Exposing beyond loopback requires explicit Host opt-in (otherwise 403)
+   python3 app/server.py --host 0.0.0.0 --allow-hosts myhost.lan,0.0.0.0
    ```
 3. Open your browser and navigate to:
    ```text

@@ -15,6 +15,7 @@ import threading
 import uuid
 import platform
 import argparse
+import ipaddress
 import shutil
 from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -316,21 +317,24 @@ def run_download_task(task_id, url, format_selector, output_dir, title=None):
 
     cmd.append(download_target)
 
-    with TASKS_LOCK:
-        TASKS[task_id]["status"] = "downloading"
-        TASKS[task_id]["started_at"] = time.time()
-
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            universal_newlines=True
-        )
-
         with TASKS_LOCK:
+            # Atomicity rule: a task is never observable in state "downloading"
+            # without its process handle stored, and a cancel decided while this
+            # worker was starting always wins. Holding TASKS_LOCK across Popen
+            # (fork + exec, a few ms) closes the /api/cancel no-op window.
+            if TASKS[task_id].get("status") == "cancelled":
+                return
+            TASKS[task_id]["status"] = "downloading"
+            TASKS[task_id]["started_at"] = time.time()
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
             TASKS[task_id]["process"] = proc
 
         custom_progress_re = re.compile(
@@ -399,7 +403,9 @@ def run_download_task(task_id, url, format_selector, output_dir, title=None):
         proc.wait()
 
         with TASKS_LOCK:
-            if proc.returncode == 0:
+            # A cancel that already marked the task wins, regardless of the
+            # child's exit code (SIGTERM may surface as 0 or nonzero).
+            if proc.returncode == 0 and TASKS[task_id].get("status") != "cancelled":
                 TASKS[task_id]["status"] = "finished"
                 TASKS[task_id]["percent"] = 100.0
                 TASKS[task_id]["eta"] = "00:00"
@@ -590,12 +596,16 @@ class MediaHubHandler(SimpleHTTPRequestHandler):
             task_id = payload.get("task_id")
             with TASKS_LOCK:
                 task = TASKS.get(task_id)
-                if task and task.get("process"):
-                    try:
-                        task["status"] = "cancelled"
-                        task["process"].terminate()
-                    except Exception:
-                        pass
+                if task and task.get("status") not in ("finished", "error", "cancelled"):
+                    # Cancel is decided under the same lock the worker uses to
+                    # store its process handle / re-check "cancelled", so it
+                    # cannot be lost or overwritten during a retry restart.
+                    task["status"] = "cancelled"
+                    if task.get("process"):
+                        try:
+                            task["process"].terminate()
+                        except Exception:
+                            pass
             self._send_json({"success": True})
 
         elif parsed.path == "/api/tasks/retry":
@@ -738,6 +748,40 @@ class MediaHubHandler(SimpleHTTPRequestHandler):
             super().do_GET()
 
 
+def is_loopback_host(host):
+    """True for loopback IPs (::1, 127.0.0.0/8) and the 'localhost' name."""
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host.lower() == "localhost"
+
+
+def resolve_allowed_hostnames(host, allow_hosts_arg):
+    """
+    Builds the Host-header allowlist. Loopback-only by default; extra Host
+    names require explicit --allow-hosts opt-in. Returns (allowed_set, warning).
+    """
+    allowed = {"127.0.0.1", "localhost"}
+    for h in (allow_hosts_arg or "").split(","):
+        if h.strip():
+            allowed.add(h.strip())
+
+    warning = None
+    if not is_loopback_host(host):
+        if host in allowed:
+            warning = (
+                f"⚠️  Exposed beyond loopback: Host '{host}' was explicitly "
+                f"allowed via --allow-hosts. Only expose to trusted networks."
+            )
+        else:
+            warning = (
+                f"⚠️  Binding non-loopback ({host}) without opt-in: clients "
+                f"sending Host '{host}:<port>' will be rejected (403). "
+                f"Pass --allow-hosts \"{host}\" to allow them explicitly."
+            )
+    return allowed, warning
+
+
 def main():
     global HOST, PORT, DOWNLOADS_DIR, ALLOWED_HOSTNAMES
 
@@ -745,12 +789,16 @@ def main():
     parser.add_argument("--host", default=DEFAULT_HOST, help="Binding host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Binding port (default: 5050)")
     parser.add_argument("--downloads-dir", default=str(DOWNLOADS_DIR), help="Path to destination downloads folder")
+    parser.add_argument(
+        "--allow-hosts", default="",
+        help="Comma-separated Host header names to permit when exposing beyond loopback (never populated automatically)"
+    )
     args = parser.parse_args()
 
     HOST = args.host
     PORT = args.port
     DOWNLOADS_DIR = Path(args.downloads_dir).resolve()
-    ALLOWED_HOSTNAMES = {"127.0.0.1", "localhost", HOST}
+    ALLOWED_HOSTNAMES, allowlist_warning = resolve_allowed_hostnames(HOST, args.allow_hosts)
 
     print("==================================================")
     print("🚀 Hundjäger Media Hub Server starting...")
@@ -758,6 +806,8 @@ def main():
     print(f"⚙️  yt-dlp Binary: {YT_DLP_BIN}")
     print(f"📁 Downloads Path: {DOWNLOADS_DIR}")
     print("🛡️  Threat Model: Host/Origin validation active")
+    if allowlist_warning:
+        print(allowlist_warning)
     print("==================================================")
 
     server = ThreadingHTTPServer((HOST, PORT), MediaHubHandler)
