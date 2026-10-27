@@ -9,9 +9,12 @@ import unittest
 import json
 import time
 import io
+import subprocess
+import sys
+from unittest import mock
+from types import SimpleNamespace
 from urllib.parse import urlparse
 from pathlib import Path
-import sys
 
 # Ensure app package is importable
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
@@ -204,6 +207,264 @@ class TestSecurityDefenses(unittest.TestCase):
             "Origin": "http://localhost:5050"
         })
         self.assertTrue(ok)
+
+
+class TestAllowlistResolution(unittest.TestCase):
+    """
+    Validates that --allow-hosts is the only path to non-loopback Host names,
+    and that binding non-loopback surfaces a startup warning (either rejected
+    or explicitly permitted — never silently auto-allowed).
+    """
+
+    def test_loopback_default_allowlist(self):
+        allowed, warning = server.resolve_allowed_hostnames("127.0.0.1", "")
+        self.assertEqual(allowed, {"127.0.0.1", "localhost"})
+        self.assertIsNone(warning)
+
+    def test_localhost_and_ipv6_loopback(self):
+        for host in ("localhost", "::1"):
+            allowed, warning = server.resolve_allowed_hostnames(host, "")
+            self.assertIsNone(warning)
+
+    def test_bind_host_is_not_auto_whitelisted(self):
+        # Regression: previously main() added HOST itself to the allowlist.
+        allowed, warning = server.resolve_allowed_hostnames("0.0.0.0", "")
+        self.assertNotIn("0.0.0.0", allowed)
+        self.assertIn("403", warning)
+        self.assertIn("--allow-hosts", warning)
+
+    def test_explicit_opt_in_warns_about_exposure(self):
+        allowed, warning = server.resolve_allowed_hostnames("0.0.0.0", "0.0.0.0")
+        self.assertIn("0.0.0.0", allowed)
+        self.assertIn("Exposed beyond loopback", warning)
+
+    def test_extra_hosts_opt_in(self):
+        allowed, warning = server.resolve_allowed_hostnames(
+            "127.0.0.1", " myhost.example.com , 192.168.1.5")
+        self.assertIn("myhost.example.com", allowed)
+        self.assertIn("192.168.1.5", allowed)
+        self.assertEqual(allowed, {"127.0.0.1", "localhost",
+                                   "myhost.example.com", "192.168.1.5"})
+        self.assertIsNone(warning)
+
+    def test_public_name_treated_as_non_loopback(self):
+        allowed, warning = server.resolve_allowed_hostnames("myhost.local", "")
+        self.assertNotIn("myhost.local", allowed)
+        self.assertIn("403", warning)
+
+
+class FakeProc:
+    """Minimal Popen stand-in for run_download_task tests."""
+    def __init__(self, lines, returncode, on_wait=None):
+        self.stdout = iter(lines)
+        self.returncode = returncode
+        self._on_wait = on_wait
+
+    def wait(self):
+        if self._on_wait:
+            self._on_wait()
+        return self.returncode
+
+    def terminate(self):
+        pass
+
+
+class TestRunDownloadTaskSubprocess(unittest.TestCase):
+    """
+    Executes run_download_task against a fake yt-dlp child process to cover
+    the PROGRESS: stdout parser, terminal transitions, and cancel races.
+    """
+    TASK_ID = "task-test"
+
+    def setUp(self):
+        with server.TASKS_LOCK:
+            server.TASKS.clear()
+            server.TASKS[self.TASK_ID] = {
+                "id": self.TASK_ID,
+                "title": "Task Test",
+                "url": "https://example.com/watch?v=1",
+                "resolution": "1080p",
+                "format_selector": "22/best",
+                "filesize_str": "",
+                "percent": 0.0,
+                "speed": "--",
+                "eta": "--",
+                "downloaded": "--",
+                "total": "--",
+                "status": "starting",
+                "filename": None,
+                "error": None,
+                "created_at": time.time()
+            }
+
+    def tearDown(self):
+        with server.TASKS_LOCK:
+            server.TASKS.clear()
+
+    def _spawn_worker(self, fake_proc, returncode=0):
+        def popen_side_effect(*args, **kwargs):
+            return fake_proc
+        with mock.patch.object(server.subprocess, "Popen", side_effect=popen_side_effect):
+            server.run_download_task(
+                self.TASK_ID,
+                "https://example.com/watch?v=1",
+                "22/best",
+                "/tmp/hundjager-test-downloads"
+            )
+
+    def test_progress_template_and_destination_parsing(self):
+        proc = FakeProc(
+            [
+                "[download] Destination: /tmp/hundjager-test-downloads/Test Video [1].mp4",
+                "PROGRESS: 50.0%|7.2MiB/s|00:30|5.2MiB|10.4MiB|5000000|10000000",
+            ],
+            returncode=0
+        )
+        self._spawn_worker(proc)
+
+        with server.TASKS_LOCK:
+            task = server.TASKS[self.TASK_ID]
+            self.assertEqual(task["status"], "finished")
+            self.assertEqual(task["filename"], "Test Video [1].mp4")
+            self.assertEqual(task["percent"], 100.0)
+            self.assertEqual(task["total"], "10.4MiB")
+            self.assertEqual(task["downloaded"], "10.4MiB")
+
+    def test_error_line_extraction(self):
+        proc = FakeProc(
+            [
+                "[download] Destination: /tmp/hundjager-test-downloads/v.mp4",
+                "second message line",
+                "ERROR: Unsupported URL",
+            ],
+            returncode=1
+        )
+        self._spawn_worker(proc)
+
+        with server.TASKS_LOCK:
+            task = server.TASKS[self.TASK_ID]
+            self.assertEqual(task["status"], "error")
+            self.assertIn("Unsupported URL", task["error"])
+            self.assertIn("(code 1)", task["error"])
+
+    def test_cancel_status_sticky_when_exited_zero(self):
+        # Simulates /api/cancel marking the task cancelled right before the
+        # worker's terminal transition; a subsequent zero exit must not flip it.
+        def mark_cancelled():
+            with server.TASKS_LOCK:
+                server.TASKS[self.TASK_ID]["status"] = "cancelled"
+
+        proc = FakeProc([], returncode=0, on_wait=mark_cancelled)
+        self._spawn_worker(proc)
+
+        with server.TASKS_LOCK:
+            self.assertEqual(server.TASKS[self.TASK_ID]["status"], "cancelled")
+
+    def test_cancel_before_spawn_wins(self):
+        # Task already cancelled during "starting": the worker must not spawn.
+        with server.TASKS_LOCK:
+            server.TASKS[self.TASK_ID]["status"] = "cancelled"
+
+        popen_mock = mock.MagicMock()
+        with mock.patch.object(server.subprocess, "Popen", popen_mock):
+            server.run_download_task(
+                self.TASK_ID, "https://example.com/watch?v=1", "22/best",
+                "/tmp/hundjager-test-downloads"
+            )
+        popen_mock.assert_not_called()
+        with server.TASKS_LOCK:
+            self.assertEqual(server.TASKS[self.TASK_ID]["status"], "cancelled")
+
+    def test_command_shape_for_format_selector(self):
+        captured = {}
+
+        def popen_side_effect(cmd, *args, **kwargs):
+            captured["cmd"] = cmd
+            return FakeProc([], returncode=0)
+
+        with mock.patch.object(server.subprocess, "Popen", side_effect=popen_side_effect):
+            server.run_download_task(
+                self.TASK_ID, "https://example.com/watch?v=1", "22/best",
+                "/tmp/hundjager-test-downloads"
+            )
+
+        cmd = captured["cmd"]
+        self.assertEqual(cmd[0], server.YT_DLP_BIN)
+        self.assertEqual(cmd[1], "-P")
+        self.assertEqual(cmd[2], "/tmp/hundjager-test-downloads")
+        self.assertIn("-f", cmd)
+        self.assertEqual(cmd[cmd.index("-f") + 1], "22/best")
+
+    def test_best_selector_omits_format_flag(self):
+        captured = {}
+
+        def popen_side_effect(cmd, *args, **kwargs):
+            captured["cmd"] = cmd
+            return FakeProc([], returncode=0)
+
+        with mock.patch.object(server.subprocess, "Popen", side_effect=popen_side_effect):
+            server.run_download_task(
+                self.TASK_ID, "https://example.com/watch?v=1", "best",
+                "/tmp/hundjager-test-downloads"
+            )
+        self.assertNotIn("-f", captured["cmd"])
+
+
+class TestInspectUrlSubprocess(unittest.TestCase):
+    """Covers inspect_url's yt-dlp -j invocation and format aggregation."""
+
+    def _inspect(self, stdout="", stderr="", returncode=0, side_effect=None):
+        def runner(cmd, **kwargs):
+            return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+        with mock.patch.object(server.subprocess, "run", side_effect=side_effect or runner) as fake_run:
+            res = server.inspect_url("Messy text: https://example.com/watch?v=123/ and more")
+            cmd = fake_run.call_args[0][0]
+            return res, cmd
+
+    def test_url_is_cleaned_before_invocation(self):
+        res, cmd = self._inspect(stdout="{}")
+        self.assertEqual(cmd[0], server.YT_DLP_BIN)
+        self.assertEqual(cmd[1], "-j")
+        self.assertIn("--skip-download", cmd)
+        self.assertEqual(cmd[-1], "https://example.com/watch?v=123")
+
+    def test_format_aggregation_and_sorting(self):
+        payload = {
+            "title": "Example Video",
+            "duration": 100,
+            "duration_string": "1:40",
+            "thumbnail": "http://img/1",
+            "extractor_key": "Example",
+            "formats": [
+                # 1080p: (3200*1000/8)*100 = 40,000,000 approx; audio-only 128 kbps -> 1,600,000
+                {"format_id": "720p", "height": 720, "tbr": 1500, "vcodec": "avc1", "acodec": "none", "ext": "mp4"},
+                {"format_id": "1080", "height": 1080, "tbr": 1000, "vcodec": "avc1", "acodec": "none", "ext": "mp4"},
+                {"format_id": "1080p", "height": 1080, "tbr": 3200, "vcodec": "avc1", "acodec": "none", "ext": "mp4"},
+                {"format_id": "m4a", "height": None, "tbr": 128, "vcodec": "none", "acodec": "mp4a", "ext": "m4a"},
+            ],
+        }
+        res, _ = self._inspect(stdout=json.dumps(payload))
+        self.assertTrue(res["success"])
+        self.assertEqual(res["title"], "Example Video")
+        self.assertEqual(res["duration"], "1:40")
+        # Highest resolution first; best (largest) 1080p variant wins the dedup.
+        self.assertEqual(res["resolutions"][0]["label"], "1080p")
+        self.assertEqual(res["resolutions"][0]["format_id"], "1080p")
+        # Video-only size plus the best audio estimate: 40,000,000 + 1,600,000.
+        self.assertEqual(res["resolutions"][0]["filesize"], 41600000)
+        self.assertEqual(res["resolutions"][1]["label"], "720p")
+        self.assertEqual(res["audio_size"], "~1.5 MB")
+
+    def test_failure_propagates_stderr(self):
+        res, _ = self._inspect(returncode=1, stderr="ERROR: Unsupported URL")
+        self.assertFalse(res["success"])
+        self.assertEqual(res["error"], "ERROR: Unsupported URL")
+
+    def test_timeout_message(self):
+        res, _ = self._inspect(
+            side_effect=subprocess.TimeoutExpired(cmd="yt-dlp-j", timeout=45))
+        self.assertFalse(res["success"])
+        self.assertEqual(res["error"], "Inspection timed out after 45 seconds")
 
 
 if __name__ == "__main__":
