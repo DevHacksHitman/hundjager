@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hundjäger Media Hub | Apex Video Downloader</title>
+  <meta name="description" content="High-performance media extractor and resolution inspector powered by yt-dlp.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=20261025.3">
+</head>
+<body>
+  <!-- Ambient background glow effects -->
+  <div class="glow-orb orb-primary"></div>
+  <div class="glow-orb orb-secondary"></div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand-area">
+        <div class="brand-crest">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <div class="brand-title-wrap">
+            <h1 class="brand-title">HUNDJÄGER</h1>
+            <span class="brand-badge">MEDIA HUB</span>
+          </div>
+          <p class="brand-subtitle">Apex Stream Inspector & Multi-Format Downloader</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <div class="status-indicator" id="engine-status">
+          <span class="status-dot"></span>
+          <span class="status-label">yt-dlp Engine Ready</span>
+        </div>
+        <button id="btn-open-folder" class="btn-ghost" title="Open ~/Downloads in Finder">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          Downloads Folder
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Input Section -->
+      <section class="card input-card">
+        <div class="section-badge">URL INSPECTOR</div>
+        <h2 class="card-heading">Extract Any Stream</h2>
+        <p class="card-subtext">Paste any supported video URL to inspect available resolutions, codecs, and sizes.</p>
+
+        <form id="inspect-form" class="url-form">
+          <div class="input-wrapper">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+            </svg>
+            <input 
+              type="url" 
+              id="url-input" 
+              placeholder="Paste video link here (e.g. YouTube, Vimeo, Twitch, X, Dailymotion, HLS)..." 
+              required
+              autocomplete="off"
+            >
+            <button type="button" id="btn-paste" class="btn-inline" title="Paste from clipboard">
+              Paste
+            </button>
+          </div>
+
+          <button type="submit" id="btn-inspect" class="btn-primary">
+            <span class="btn-text">Inspect Stream</span>
+            <span class="btn-spinner hidden"></span>
+            <svg class="btn-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </button>
+        </form>
+
+        <div class="quick-tags">
+          <span class="tag-label">Supported sites:</span>
+          <span class="chip">YouTube</span>
+          <span class="chip">Vimeo</span>
+          <span class="chip">Twitch</span>
+          <span class="chip">X / Twitter</span>
+          <span class="chip">Reddit</span>
+          <span class="chip">Direct HLS</span>
+          <span class="chip">+1,000 more</span>
+        </div>
+      </section>
+
+      <!-- Inspection Preview Card (Reveals on inspect) -->
+      <section id="preview-card" class="card preview-card hidden">
+        <div class="preview-header">
+          <div class="video-meta">
+            <span class="site-tag" id="preview-site">Site</span>
+            <h3 id="preview-title" class="video-title">Video Title</h3>
+            <div class="meta-row">
+              <span class="meta-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                <span id="preview-duration">00:00</span>
+              </span>
+              <span class="meta-item text-muted" id="preview-resolutions-count">Resolutions available</span>
+            </div>
+          </div>
+
+          <div class="thumbnail-container">
+            <img id="preview-thumb" src="" alt="Thumbnail preview">
+            <span class="thumb-badge" id="preview-thumb-duration">00:00</span>
+          </div>
+        </div>
+
+        <div class="resolution-selection-area">
+          <label class="section-label">Select Target Quality:</label>
+          <div id="resolutions-grid" class="resolutions-grid">
+            <!-- Populated via JavaScript -->
+          </div>
+        </div>
+
+        <div class="preview-actions">
+          <button id="btn-start-download" class="btn-accent">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span id="btn-download-text">Start Download</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Active Downloads Queue -->
+      <section class="card queue-card">
+        <div class="queue-header">
+          <div class="queue-title-wrap">
+            <div class="section-badge">DOWNLOAD ENGINE</div>
+            <h2 class="card-heading">Active Tasks & Progress</h2>
+          </div>
+          <div class="queue-controls">
+            <span id="queue-count-badge" class="count-badge">0 active</span>
+            <div class="queue-actions-group">
+              <button type="button" id="btn-retry-failed" class="btn-queue-action btn-queue-accent" title="Resume and retry failed downloads">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 4v6h-6"></path>
+                  <path d="M1 20v-6h6"></path>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                <span>Retry Failed</span>
+              </button>
+              <button type="button" id="btn-clear-finished" class="btn-queue-action" title="Clear finished, failed, or cancelled downloads">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                <span>Clear Finished</span>
+              </button>
+              <button type="button" id="btn-clear-all" class="btn-queue-action btn-queue-danger" title="Cancel active and clear all downloads">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+                <span>Clear All</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="tasks-container" class="tasks-container">
+          <div class="empty-state" id="empty-tasks-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="2" y="6" width="20" height="12" rx="2"></rect>
+              <circle cx="12" cy="12" r="2"></circle>
+            </svg>
+            <p>No active downloads right now.</p>
+            <span>Paste a link above and inspect formats to begin.</span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Toast container -->
+    <div id="toast-container" class="toast-container"></div>
+  </div>
+
+  <script src="app.js?v=20261025.3"></script>
+</body>
+</html>
