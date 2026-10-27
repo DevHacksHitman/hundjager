@@ -71,7 +71,12 @@ graph TD
    git clone https://github.com/DevHacksHitman/hundjager.git
    cd hundjager
    ```
-2. Start the local server:
+2. Enable the pre-push sensitivity gate (it refuses to push any commit containing
+   known personal-leak fingerprints and safe-fails on scan errors — see `githooks/pre-push`):
+   ```bash
+   git config core.hooksPath githooks
+   ```
+3. Start the local server:
    ```bash
    python3 app/server.py
    ```
@@ -83,7 +88,7 @@ graph TD
    # Exposing beyond loopback requires explicit Host opt-in (otherwise 403)
    python3 app/server.py --host 0.0.0.0 --allow-hosts myhost.lan,0.0.0.0
    ```
-3. Open your browser and navigate to:
+4. Open your browser and navigate to:
    ```text
    http://127.0.0.1:5050
    ```
