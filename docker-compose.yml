@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  hundjager:
+    build: .
+    container_name: hundjager-hub
+    ports:
+      - "5050:5050"
+    volumes:
+      - ./downloads:/downloads
+    restart: unless-stopped
