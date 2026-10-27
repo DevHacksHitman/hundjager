@@ -28,8 +28,9 @@ Single-file, zero-dependency server (`app/server.py`, ~772 lines, Python stdlib 
 ## Repo hygiene
 - `docs/` and `career_transformation_plan.local.md` are git-**ignored** personal notes (AI chat transcripts, yt-dlp cheatsheets, career/meme drafts), not project documentation. Don't treat them as sources of truth and don't try to commit them. Same for `*.local.md`, `*.plan.md`, `private_docs/`, `.notes/`.
 - Git history was deliberately rebuilt (orphan branch) to purge an earlier 2-commit chain containing personal transcripts; the old chain is unrecoverable. Never "restore" deleted files (e.g. `docs/video_downloader`) into git.
-- No git remote is configured. Commit style is conventional: `type(scope): summary` — e.g. `feat(core):`, `test(server):`, `docs(readme):`. When the remote is created: push `main` only; never `--mirror` or `--tags`; never push from a Kilo worktree-pool worktree. Update this line once `origin` exists.
+- Origin: `https://github.com/DevHacksHitman/hundjager.git` (public). Commit style is conventional: `type(scope): summary` — e.g. `feat(core):`, `test(server):`, `docs(readme):`. Push `main` only; never `--mirror` or `--tags`; never push from a Kilo worktree-pool worktree.
 - Sensitivity scans must cover ALL refs and worktree HEADs — `git log -p --all`, not plain `git log -p`, and re-verify from a fresh clone after any push.
+- Pre-push sensitivity gate lives in `githooks/pre-push` (blocking, safe-fails on scan error). After ANY fresh clone: `git config core.hooksPath githooks`, or protection is lost. Modifying its pattern list: every needle must break up its own literal with a character class (e.g. `youpo[r]n`, `sl[u]t`) — a plain literal makes the hook's own source match the scan and every push self-blocks forever (found live on the first push).
 
 ## Invariants (regression-tested; don't break)
 - **Loopback-only allowlist**: the bind host is never auto-added to `ALLOWED_HOSTNAMES`; `resolve_allowed_hostnames()` is the single decision point and `TestAllowlistResolution` guards it. Any change must keep the explicit `--allow-hosts` opt-in + startup warning.
