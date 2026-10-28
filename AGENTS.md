@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## What this is
-Single-file, zero-dependency server (`app/server.py`, ~772 lines, Python stdlib only) wrapping `yt-dlp` (which shells out to `ffmpeg` for stream merging/transcoding — server.py itself never calls ffmpeg) behind a local web UI. Frontend in `app/static/` is vanilla HTML/CSS/JS — no build step, no bundler, no venv, no pip/npm packages. "Zero external dependencies" is an explicit project constraint (README badge); do not add pip dependencies.
+Single-file, zero-dependency server (`app/server.py`, ~822 lines, Python stdlib only) wrapping `yt-dlp` (which shells out to `ffmpeg` for stream merging/transcoding — server.py itself never calls ffmpeg) behind a local web UI. Frontend in `app/static/` is vanilla HTML/CSS/JS — no build step, no bundler, no venv, no pip/npm packages. "Zero external dependencies" is an explicit project constraint (README badge); do not add pip dependencies.
 
 ## Commands
 - Tests (fast, no network, no packages): `python3 -m unittest discover -s tests -p "test_*.py" -v`. CI matrix is 3.10–3.12; code runs fine on newer (3.14 verified).
@@ -28,7 +28,9 @@ Single-file, zero-dependency server (`app/server.py`, ~772 lines, Python stdlib 
 ## Repo hygiene
 - `docs/` and `career_transformation_plan.local.md` are git-**ignored** personal notes (AI chat transcripts, yt-dlp cheatsheets, career/meme drafts), not project documentation. Don't treat them as sources of truth and don't try to commit them. Same for `*.local.md`, `*.plan.md`, `private_docs/`, `.notes/`.
 - Git history was deliberately rebuilt (orphan branch) to purge an earlier 2-commit chain containing personal transcripts; the old chain is unrecoverable. Never "restore" deleted files (e.g. `docs/video_downloader`) into git.
-- Origin: `https://github.com/DevHacksHitman/hundjager.git` (public). Commit style is conventional: `type(scope): summary` — e.g. `feat(core):`, `test(server):`, `docs(readme):`. Push `main` only; never `--mirror` or `--tags`; never push from a Kilo worktree-pool worktree.
+- Origin: `https://github.com/DevHacksHitman/hundjager.git` (public); profile repo: `DevHacksHitman/DevHacksHitman` (public, README only). Commit style is conventional: `type(scope): summary` — e.g. `feat(core):`, `test(server):`, `docs(readme):`. Push `main` only; never `--mirror` or `--tags`; never push from a Kilo worktree-pool worktree.
+- Commit email: always the GitHub noreply (`218126545+DevHacksHitman@users.noreply.github.com`, set repo-local) — never the personal gmail; history was rewritten to purge it, and GitHub blocks email-exposing pushes.
+- Pushes are performed by the orchestrator, not implementers (local-only briefing: `private_docs/handoff-sprint2.md` + `private_docs/backlog.md`, git-ignored and reference-only).
 - Sensitivity scans must cover ALL refs and worktree HEADs — `git log -p --all`, not plain `git log -p`, and re-verify from a fresh clone after any push.
 - Pre-push sensitivity gate lives in `githooks/pre-push` (blocking, safe-fails on scan error). After ANY fresh clone: `git config core.hooksPath githooks`, or protection is lost. Modifying its pattern list: every needle must break up its own literal with a character class (e.g. `youpo[r]n`, `sl[u]t`) — a plain literal makes the hook's own source match the scan and every push self-blocks forever (found live on the first push).
 
