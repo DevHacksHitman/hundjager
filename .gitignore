@@ -64,3 +64,6 @@ docs/
 *.local
 private_docs/
 
+# Agent harness artifacts
+.playwright-mcp/
+
