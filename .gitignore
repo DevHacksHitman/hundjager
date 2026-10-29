@@ -66,4 +66,6 @@ private_docs/
 
 # Agent harness artifacts
 .playwright-mcp/
+opencode.json
+.opencode/
 
