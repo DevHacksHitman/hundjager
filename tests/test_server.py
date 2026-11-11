@@ -455,6 +455,43 @@ class TestInspectUrlSubprocess(unittest.TestCase):
         self.assertEqual(res["resolutions"][1]["label"], "720p")
         self.assertEqual(res["audio_size"], "~1.5 MB")
 
+    def test_hls_muxed_formats_without_vcodec(self):
+        """Some HLS extractors report vcodec='none' for muxed variants
+        that still have a height.  These must be recognised as video formats
+        and must NOT have audio bytes double-added (the stream is muxed)."""
+        payload = {
+            "title": "Test Muxed HLS",
+            "duration": 100,
+            "duration_string": "1:40",
+            "thumbnail": "http://img/1",
+            "extractor_key": "DemoHLSSite",
+            "formats": [
+                # Direct HTTP fallbacks — no height, no codecs → ignored
+                {"format_id": "mp4-low", "vcodec": "none", "acodec": "none",
+                 "ext": "mp4", "protocol": "https"},
+                {"format_id": "mp4-high", "vcodec": "none", "acodec": "none",
+                 "ext": "mp4", "protocol": "https"},
+                # HLS muxed variants — vcodec "none" but height present
+                {"format_id": "hls-250p", "vcodec": "none", "acodec": "none",
+                 "height": 250, "tbr": 155.648, "ext": "mp4",
+                 "protocol": "m3u8_native"},
+                {"format_id": "hls-480p", "vcodec": "none", "acodec": "none",
+                 "height": 480, "tbr": 763.904, "ext": "mp4",
+                 "protocol": "m3u8_native"},
+                {"format_id": "hls-720p", "vcodec": "none", "acodec": "none",
+                 "height": 720, "tbr": 1327.104, "ext": "mp4",
+                 "protocol": "m3u8_native"},
+            ],
+        }
+        res, _ = self._inspect(stdout=json.dumps(payload))
+        self.assertTrue(res["success"])
+        labels = [r["label"] for r in res["resolutions"]]
+        # All three HLS variants with height must appear, highest first.
+        self.assertEqual(labels, ["720p", "480p", "250p"])
+        # Muxed streams: filesize is just tbr*duration, no audio bolt-on.
+        # 720p: (1327.104 * 1000 / 8) * 100 = 16,588,800
+        self.assertEqual(res["resolutions"][0]["filesize"], 16588800)
+
     def test_failure_propagates_stderr(self):
         res, _ = self._inspect(returncode=1, stderr="ERROR: Unsupported URL")
         self.assertFalse(res["success"])

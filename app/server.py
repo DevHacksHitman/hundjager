@@ -236,11 +236,18 @@ def inspect_url(url):
             if acodec != "none":
                 has_audio = True
 
-            if vcodec != "none" and height:
+            # Accept as video if explicit video codec OR has a height (many
+            # HLS/DASH extractors report vcodec="none" for muxed streams).
+            is_video = (vcodec != "none" and height) or (height and fmt_id not in ("", "best"))
+            if is_video:
                 res_key = f"{height}p"
                 f_bytes, is_approx = estimate_stream_bytes(f, duration, height)
 
-                if acodec == "none" and f_bytes > 0:
+                # Only add audio overhead for genuinely video-only streams
+                # (demuxed).  When both codecs are "none" the stream is
+                # likely a muxed HLS variant that already contains audio.
+                is_demuxed_video = (vcodec != "none" and acodec == "none")
+                if is_demuxed_video and f_bytes > 0:
                     f_bytes += best_audio_bytes
                     is_approx = True
 
